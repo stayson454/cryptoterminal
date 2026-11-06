@@ -18,6 +18,13 @@
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const STORE = 'cryptoterminal.margin.v1';
   const BAPI = 'https://www.binance.com/bapi/margin/v1/public/margin/vip/spec';
+  // Адрес сервера с займами и пулом. Локально и на своём VPS — тот же сервер,
+  // на статическом хостинге (GitHub Pages) — из site-config.js.
+  const API = (function () {
+    const cfg = window.CT_CONFIG || {};
+    const staticHost = /\.github\.io$/.test(location.hostname) || location.protocol === 'file:';
+    return staticHost ? String(cfg.marginApi || '').replace(/\/+$/, '') : '';
+  })();
 
   const COLS = [
     { key: 'borrow', label: 'Займы', unit: true, cls: 'mg-c-borrow', needKey: true },
@@ -125,7 +132,7 @@
 
   async function loadStatus() {
     try {
-      data.server = await getJSON('/api/margin/status');
+      data.server = await getJSON(API + '/api/margin/status');
     } catch (e) {
       data.server = null;
     }
@@ -145,13 +152,13 @@
 
   async function loadTable() {
     if (data.mode !== 'key') { data.table = null; return; }
-    data.table = await getJSON('/api/margin/table?win=' + st.win + '&base=' + st.base);
+    data.table = await getJSON(API + '/api/margin/table?win=' + st.win + '&base=' + st.base);
   }
 
   async function loadEvents() {
     if (data.mode !== 'key') { data.events = []; return; }
     const e = st.ev;
-    const j = await getJSON('/api/margin/events?days=' + e.days + '&min24=' + e.min24 + '&win=' + e.win + '&growth=' + e.growth);
+    const j = await getJSON(API + '/api/margin/events?days=' + e.days + '&min24=' + e.min24 + '&win=' + e.win + '&growth=' + e.growth);
     data.events = j.events || [];
   }
 
@@ -606,7 +613,7 @@
 
     async flows(asset, start, end, interval) {
       const days = Math.min(15, Math.ceil((Date.now() - start) / 86400e3) + 1);
-      const s = await getJSON('/api/margin/series?asset=' + encodeURIComponent(asset) + '&days=' + days);
+      const s = await getJSON(API + '/api/margin/series?asset=' + encodeURIComponent(asset) + '&days=' + days);
       const step = { '15m': 900e3, '1h': 3600e3, '4h': 14400e3 }[interval];
       const px = priceOf(asset, { price: s.price });
       const k = st.units === 'USDT' ? (px || null) : 1;

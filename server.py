@@ -45,6 +45,8 @@ POLL_SEC = 60             # опрос пула
 PRICE_SEC = 300           # обновление цен
 KEEP_DAYS = 15            # сколько дней держать историю
 UA = 'CryptoTerminal/1.0 (local)'
+ALLOW_ORIGINS = {o.strip().rstrip('/') for o in os.environ.get(
+    'CT_ALLOW_ORIGINS', 'https://stayson454.github.io').split(',') if o.strip()}
 
 
 # ---------------------------------------------------------------- config
@@ -484,7 +486,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
+        # CORS: сайт на GitHub Pages читает /api/margin/* с этого сервера.
+        # Разрешённые источники — переменная CT_ALLOW_ORIGINS (через запятую).
+        origin = self.headers.get('Origin') if hasattr(self, 'headers') and self.headers else None
+        if origin and (self.path or '').startswith('/api/') and origin in ALLOW_ORIGINS:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        self.send_header('Access-Control-Max-Age', '86400')
+        self.end_headers()
 
     def _json(self, obj, code=200):
         body = json.dumps(obj, separators=(',', ':'), allow_nan=False, default=lambda x: None).encode('utf-8')

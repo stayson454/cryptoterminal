@@ -22,7 +22,8 @@ OUT = os.path.join(ROOT, '.publish')
 SITE_FILES = [
     'index.html', 'styles.css',
     'storage-db.js', 'data-engine.js', 'chart-renderer.js', 'indicators.js', 'margin-page.js', 'app.js',
-    'server.py', 'publish.py', 'README.md', '.gitignore', '.nojekyll',
+    'site-config.js', 'server.py', 'publish.py', 'README.md', '.gitignore', '.gitattributes', '.nojekyll',
+    'deploy/setup.sh',
 ]
 
 
@@ -43,7 +44,9 @@ def main():
         if not os.path.exists(src):
             print('нет файла:', name)
             continue
-        shutil.copy2(src, os.path.join(OUT, name))
+        dst = os.path.join(OUT, name)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
     run('git', 'add', '-A', cwd=OUT)
     if subprocess.run(['git', 'diff', '--cached', '--quiet'], cwd=OUT).returncode == 0:
         print('Изменений нет — публиковать нечего.')
