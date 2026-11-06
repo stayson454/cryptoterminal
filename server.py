@@ -94,10 +94,12 @@ def signed_get(key, secret, path, params):
     try:
         return http_json('https://api.binance.com' + path + '?' + q + '&signature=' + sig, {'X-MBX-APIKEY': key})
     except urllib.error.HTTPError as e:
-        if e.code == 400 and b'-1021' in e.read():
+        body = e.read()
+        if e.code == 400 and b'-1021' in body:
             sync_time(force=True)       # часы ушли — пересинхронизироваться и повторить один раз
             return signed_get_once(key, secret, path, params)
-        raise
+        # тело ответа уже прочитано — передаём его в текст ошибки
+        raise RuntimeError('HTTP %s: %s' % (e.code, body.decode('utf-8', 'replace')[:300])) from None
 
 
 def signed_get_once(key, secret, path, params):
