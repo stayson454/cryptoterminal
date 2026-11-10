@@ -299,13 +299,13 @@
       }
     }
 
-    detailKey() { return this.cell.market + ':' + this.cell.symbol; }
+    detailKey() { return this.cell.market + ':' + this.cell.symbol + ':' + this.cell.tf; }
 
     applyDetail() {
       const tick = this.engine.tick || 0.01;
       let idx = this.cell.detail[this.detailKey()];
       if (idx === undefined) {
-        idx = defaultDetailIdx(this.engine.lastPrice, tick);
+        idx = defaultDetailIdx(this.engine.lastPrice, tick, this.engine.tfMs);
         this.cell.detail[this.detailKey()] = idx;
         save();
       }
@@ -376,9 +376,10 @@
     }
   }
 
-  function defaultDetailIdx(price, tick) {
+  function defaultDetailIdx(price, tick, tfMs) {
     if (!(price > 0) || !(tick > 0)) return 3;
-    const target = price * 0.00013;
+    // крупнее таймфрейм — крупнее шаг строки (5м ≈ 10 USDT, 1ч ≈ 50 USDT на BTC)
+    const target = price * 0.00013 * Math.sqrt(Math.max(1, (tfMs || 300e3) / 300e3));
     let best = 0;
     let bestErr = Infinity;
     DETAIL_MULTS.forEach((m, i) => {
@@ -435,7 +436,7 @@
     $('#title-market').textContent = m.label;
     if (document.body.getAttribute('data-route') !== 'margin') document.title = c.symbol + ' · ' + m.label + ' — график — CryptoTerminal';
     if (v) {
-      const idx = c.detail[c.market + ':' + c.symbol];
+      const idx = c.detail[c.market + ':' + c.symbol + ':' + c.tf];
       if (idx !== undefined) $('#detail-range').value = String(idx);
       $('#detail-value').textContent = v.detailLabel || '—';
     }
@@ -478,7 +479,7 @@
     });
     $('#detail-range').addEventListener('input', (e) => {
       const c = cellState();
-      c.detail[c.market + ':' + c.symbol] = Number(e.target.value);
+      c.detail[c.market + ':' + c.symbol + ':' + c.tf] = Number(e.target.value);
       save();
       activeView().applyDetail();
     });
@@ -1255,6 +1256,11 @@
   tickers.on('status', () => { if (state.dock.view === 'access') renderAccess(); });
 
   function init() {
+    // вернулись на вкладку / проснулся ПК — не ждём таймеров, проверяем соединения
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) views.forEach((v) => v.engine.wake());
+    });
+    window.addEventListener('online', () => views.forEach((v) => v.engine.wake()));
     bindHeader();
     bindTabs();
     bindDock();

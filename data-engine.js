@@ -70,6 +70,8 @@
   const BACKFILL_PAGES = 16;
   const LOGSTEP = Math.log(1 + BUCKET_PCT / 100);
   const MINUTE = 60e3;
+  const FETCH_TIMEOUT_MS = 15000;   // зависший запрос обрывается и повторяется
+  const WS_SILENCE_MS = 45000;      // поток сделок молчит дольше — переподключаем
   const Z_SMOOTH_MIN = 60;          // сглаживание полос стакана во времени для Z (минуты)
 
   /**
@@ -104,7 +106,15 @@
     let lastErr = null;
     for (let i = 0; i < tries; i++) {
       try {
-        const res = await fetch(url, { cache: 'no-store' });
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+        let res;
+        try {
+          res = await fetch(url, { cache: 'no-store', signal: ctl.signal });
+          if (res.ok) return await res.json();      // тело читается под тем же таймаутом
+        } finally {
+          clearTimeout(timer);
+        }
         if (res.status === 429 || res.status === 418) {
           const ra = Number(res.headers.get('Retry-After')) || (2 + i * 3);
           await sleep(ra * 1000);
@@ -114,9 +124,8 @@
           const text = await res.text().catch(() => '');
           throw new Error('HTTP ' + res.status + ' ' + url.split('?')[0] + ' ' + text.slice(0, 160));
         }
-        return await res.json();
       } catch (e) {
-        lastErr = e;
+        lastErr = e && e.name === 'AbortError' ? new Error('Таймаут запроса ' + url.split('?')[0]) : e;
         await sleep(400 * Math.pow(2, i));
       }
     }
@@ -585,11 +594,25 @@
       }
       if (this.wsRetryTimer) { clearTimeout(this.wsRetryTimer); this.wsRetryTimer = null; }
       if (this.depthTimer) { clearInterval(this.depthTimer); this.depthTimer = null; }
+      if (this.wdTimer) { clearInterval(this.wdTimer); this.wdTimer = null; }
+      this.wsOpenedOnce = false;
+      this.depthBusy = 0;
     }
 
+    /**
+     * Ряд для статистики Z. Берём самый крупный ТФ не старше основного, в окне
+     * базы которого хотя бы 12 точек (иначе на 1ч с базой 4ч статистика пуста
+     * и Z вообще не считается); если такого нет — прежний выбор.
+     */
     _pickBaselineTf() {
-      const span = MAIN_CANDLES * this.tfMs + BASES[this.base];
+      const base = BASES[this.base];
+      const span = MAIN_CANDLES * this.tfMs + base;
       const max = MARKETS[this.market].klineMax * 2;
+      const finer = TF_LIST.filter((tf) => TF_MS[tf] <= this.tfMs);
+      for (let i = finer.length - 1; i >= 0; i--) {
+        const m = TF_MS[finer[i]];
+        if (base / m >= 12 && span / m <= max) return finer[i];
+      }
       for (const tf of TF_LIST) {
         if (TF_MS[tf] < this.tfMs) continue;
         if (span / TF_MS[tf] <= max) return tf;
@@ -597,9 +620,14 @@
       return '4h';
     }
 
+    /** Окно базы: не короче 12 точек базового ряда. */
+    _baseMs() {
+      return Math.max(BASES[this.base], 12 * TF_MS[this.tfB || this.tf]);
+    }
+
     async _loadKlines(gen) {
       this.tfB = this._pickBaselineTf();
-      const baseMs = BASES[this.base];
+      const baseMs = this._baseMs();
       if (this.tfB === this.tf) {
         const total = Math.min(MARKETS[this.market].klineMax * 2, MAIN_CANDLES + Math.ceil(baseMs / this.tfMs) + 2);
         const ks = await fetchKlines(this.market, this.symbol, this.tf, total);
@@ -620,7 +648,7 @@
 
     async _fetchBaseline(gen) {
       const tfBMs = TF_MS[this.tfB];
-      const span = this.candles.length * this.tfMs + BASES[this.base];
+      const span = this.candles.length * this.tfMs + this._baseMs();
       const count = Math.min(MARKETS[this.market].klineMax * 2, Math.ceil(span / tfBMs) + 2);
       const ks = await fetchKlines(this.market, this.symbol, this.tfB, count);
       if (gen !== this.gen) return;
@@ -631,7 +659,8 @@
 
     async _loadBaselineIfNeeded(gen) {
       const newTfB = this._pickBaselineTf();
-      const needSpan = BASES[this.base] + this.candles.length * this.tfMs;
+      this.tfB = newTfB;
+      const needSpan = this._baseMs() + this.candles.length * this.tfMs;
       if (newTfB === this.tf) {
         // общий ряд: при нехватке прогрева догружаем свечи текущего ТФ
         const have = this.candles.length ? (this.candles[this.candles.length - 1].t - this.candles[0].t) : 0;
@@ -702,13 +731,20 @@
       }
       this.ws = ws;
       this._status('trades', 'connecting');
+      this.lastWsMsg = Date.now();
+      this._startWatchdog(gen);
       ws.onopen = () => {
         if (gen !== this.gen) return;
+        const reopened = this.wsOpenedOnce;
+        this.wsOpenedOnce = true;
         this.wsAttempts = 0;
+        this.lastWsMsg = Date.now();
         this._status('trades', 'live');
+        if (reopened && this.backfillDone) this._fillGap(gen);
       };
       ws.onmessage = (ev) => {
         if (gen !== this.gen) return;
+        this.lastWsMsg = Date.now();
         let m;
         try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (!m || m.e !== 'aggTrade') return;
@@ -726,6 +762,67 @@
         const delay = Math.min(15000, 500 * Math.pow(2, this.wsAttempts));
         this.wsRetryTimer = setTimeout(() => { if (gen === this.gen) this._openTradeStream(gen); }, delay);
       };
+    }
+
+    /** Тишина в потоке сделок (спящая вкладка, тихий обрыв) — закрываем сокет, onclose переподключит. */
+    _startWatchdog(gen) {
+      if (this.wdTimer) clearInterval(this.wdTimer);
+      this.wdTimer = setInterval(() => {
+        if (gen !== this.gen) { clearInterval(this.wdTimer); return; }
+        if (Date.now() - this.lastWsMsg > WS_SILENCE_MS && this.ws) {
+          this.lastWsMsg = Date.now();
+          try { this.ws.close(); } catch (e) { /* уже закрыт */ }
+          // если close не сработал (сокет «завис» в CONNECTING), открываем заново принудительно
+          setTimeout(() => {
+            if (gen === this.gen && this.ws && this.ws.readyState !== 1) {
+              this.ws.onclose = null;
+              this._openTradeStream(gen);
+            }
+          }, 3000);
+        }
+      }, 5000);
+    }
+
+    /** Вернулись на вкладку или проснулся ПК: проверяем соединения и опрос стакана. */
+    wake() {
+      if (!this.ready) return;
+      const stale = Date.now() - this.lastWsMsg > 15000;
+      if (stale && this.ws && this.ws.readyState === 1) { try { this.ws.close(); } catch (e) { /* ок */ } }
+      this._pollDepth(this.gen);
+    }
+
+    /** После переподключения докачиваем сделки, пропущенные за время обрыва. */
+    async _fillGap(gen) {
+      const m = MARKETS[this.market];
+      this.backfillDone = false;           // живые сделки временно копятся в буфере
+      this.wsBuffer = [];
+      try {
+        for (let page = 0; page < 8; page++) {
+          const rows = await fetchJSON(m.rest + '/aggTrades?symbol=' + this.symbol + '&fromId=' + (this.lastAggId + 1) + '&limit=1000', 2);
+          if (gen !== this.gen) return;
+          if (!rows.length) break;
+          for (const t of rows) {
+            if (t.a <= this.lastAggId) continue;
+            this.lastAggId = t.a;
+            this._applyTrade({ a: t.a, p: +t.p, q: +t.q, T: t.T, buy: !t.m }, false);
+          }
+          if (rows.length < 1000) break;
+        }
+      } catch (e) {
+        console.warn('[engine] не удалось докачать пропущенные сделки:', e);
+      }
+      if (gen !== this.gen) return;
+      const buf = this.wsBuffer;
+      this.wsBuffer = [];
+      this.backfillDone = true;
+      buf.sort((x, y) => x.a - y.a);
+      for (const tr of buf) {
+        if (tr.a <= this.lastAggId) continue;
+        this.lastAggId = tr.a;
+        this._applyTrade(tr, false);
+      }
+      this._recomputeAll();
+      this.emit('newCandle', this);
     }
 
     async _backfillTrades(gen) {
@@ -866,7 +963,14 @@
     _extendModelForNewCandle() {
       // модель пересчитывается по всей серии (дёшево: ≤ 3000 × 400 корзин)
       reconstructSeries(this.candles, this.tfMs);
-      if (!this.baselineShared && this.baseline.length) {
+      if (!this.baselineShared && this.baseline.length && TF_MS[this.tfB] < this.tfMs) {
+        const g = this.gen;
+        this._fetchBaseline(g).then(() => {
+          if (g !== this.gen) return;
+          this._recomputeAll();
+          this.emit('book', this);
+        }).catch(() => {});
+      } else if (!this.baselineShared && this.baseline.length) {
         const tfBMs = TF_MS[this.tfB];
         const lastB = this.baseline[this.baseline.length - 1];
         const lastC = this.candles[this.candles.length - 1];
@@ -900,6 +1004,16 @@
 
     // --------------------------------------------------------- depth
     async _pollDepth(gen) {
+      if (this.depthBusy && Date.now() - this.depthBusy < 20000) return;   // предыдущий опрос ещё идёт
+      this.depthBusy = Date.now();
+      try {
+        await this._pollDepthInner(gen);
+      } finally {
+        this.depthBusy = 0;
+      }
+    }
+
+    async _pollDepthInner(gen) {
       const m = MARKETS[this.market];
       let depth;
       try {
@@ -1141,13 +1255,14 @@
       }
 
       // 3) Z-Score по каждой свече
-      const baseMs = BASES[this.base];
+      const baseMs = this._baseMs();
       let realCount = 0;
       let storedUsed = 0;
       for (const c of this.candles) {
         const endT = c.t + this.tfMs;
-        const j0 = lowerBound(baseT, endT - baseMs);
-        const j1 = lowerBound(baseT, endT);
+        // база — окно ДО свечи (сама свеча в статистику не входит, иначе Z зажимается)
+        const j0 = lowerBound(baseT, c.t - baseMs);
+        const j1 = lowerBound(baseT, c.t);
         const stored = !c.real && this.storedZ.get(c.t);
         if (stored) {
           for (let b = 0; b < NB; b++) { c.z[b] = stored.bid[b]; c.z[NB + b] = stored.ask[b]; }
@@ -1157,9 +1272,25 @@
         }
         c.zStored = false;
         if (c.real) realCount++;
+        // значение свечи — среднее по точкам того же базового ряда внутри свечи:
+        // иначе модель крупного ТФ и модель базы дают сдвиг масштаба и Z «уезжает»
+        let xs = c.bandsS || c.bands;
+        if (!this.baselineShared && TF_MS[this.tfB] < this.tfMs) {
+          const a0 = lowerBound(baseT, c.t);
+          const a1 = lowerBound(baseT, c.t + this.tfMs);
+          if (a1 > a0) {
+            xs = new Float64Array(2 * NB);
+            for (let j = 0; j < 2 * NB; j++) {
+              let sum = 0;
+              let m = 0;
+              for (let q = a0; q < a1; q++) { const v = baseVals[q][j]; if (isFinite(v)) { sum += v; m++; } }
+              xs[j] = m ? sum / m : NaN;
+            }
+          }
+        }
         for (let j = 0; j < 2 * NB; j++) {
           const cnt = CN[j][j1] - CN[j][j0];
-          const x = c.bandsS ? c.bandsS[j] : c.bands[j];
+          const x = xs[j];
           if (cnt < 8 || !isFinite(x)) { c.z[j] = NaN; continue; }
           const mean = (S1[j][j1] - S1[j][j0]) / cnt;
           const variance = Math.max(0, (S2[j][j1] - S2[j][j0]) / cnt - mean * mean);
