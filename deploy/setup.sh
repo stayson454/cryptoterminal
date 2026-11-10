@@ -82,6 +82,40 @@ systemctl daemon-reload
 systemctl enable cryptoterminal >/dev/null
 systemctl restart cryptoterminal
 
+say "Автообновление (каждые 10 минут проверяет репозиторий)"
+cat > /usr/local/bin/cryptoterminal-update <<'EOS'
+#!/usr/bin/env bash
+set -e
+cd /opt/cryptoterminal
+OLD=$(git -c safe.directory=/opt/cryptoterminal rev-parse HEAD)
+git -c safe.directory=/opt/cryptoterminal pull --ff-only -q
+NEW=$(git -c safe.directory=/opt/cryptoterminal rev-parse HEAD)
+if [ "$OLD" != "$NEW" ]; then
+  chown -R cryptoterminal:cryptoterminal /opt/cryptoterminal
+  chmod 600 /opt/cryptoterminal/config.local.json
+  systemctl restart cryptoterminal
+fi
+EOS
+chmod +x /usr/local/bin/cryptoterminal-update
+cat > /etc/systemd/system/cryptoterminal-update.service <<'EOS'
+[Unit]
+Description=Обновление CryptoTerminal из репозитория
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cryptoterminal-update
+EOS
+cat > /etc/systemd/system/cryptoterminal-update.timer <<'EOS'
+[Unit]
+Description=Проверка обновлений CryptoTerminal
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+[Install]
+WantedBy=timers.target
+EOS
+systemctl daemon-reload
+systemctl enable --now cryptoterminal-update.timer >/dev/null
+
 say "HTTPS-адрес"
 IP="$(curl -fsS --max-time 10 https://api.ipify.org || curl -fsS --max-time 10 https://ifconfig.me)"
 HOST="${CT_HOST:-$(echo "$IP" | tr . -).sslip.io}"
@@ -135,6 +169,7 @@ cat <<EOF
 
  Полезное:
    журнал сервера:   sudo journalctl -u cryptoterminal -f
-   обновить сайт:    curl -fsSL https://raw.githubusercontent.com/stayson454/cryptoterminal/main/deploy/setup.sh | sudo bash
+   автообновление:   каждые 10 минут (sudo journalctl -u cryptoterminal-update)
+   обновить сейчас:  sudo /usr/local/bin/cryptoterminal-update   или  curl -fsSL https://raw.githubusercontent.com/stayson454/cryptoterminal/main/deploy/setup.sh | sudo bash
 =============================================================================
 EOF
