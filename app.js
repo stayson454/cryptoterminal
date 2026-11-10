@@ -265,7 +265,9 @@
 
     showLoading(text, isError) {
       const box = this.q('loading');
+      if (box.getAttribute('data-show') !== 'true') this.loadingSince = Date.now();
       box.setAttribute('data-show', 'true');
+      this.isLoadError = !!isError;
       const t = this.q('loading-text');
       this.q('spinner').style.display = isError ? 'none' : '';
       if (isError) {
@@ -276,7 +278,7 @@
       }
     }
 
-    hideLoading() { this.q('loading').setAttribute('data-show', 'false'); }
+    hideLoading() { this.q('loading').setAttribute('data-show', 'false'); this.loadingSince = 0; this.isLoadError = false; }
 
     async load(force) {
       const c = this.cell;
@@ -1255,6 +1257,50 @@
   });
   tickers.on('status', () => { if (state.dock.view === 'access') renderAccess(); });
 
+  // ---------------------------------------------------------- самолечение
+  // График «замер» или загрузка висит — лечим без ручной перезагрузки страницы
+  function startHealthChecks() {
+    views.forEach((v) => { v.lastActivity = Date.now(); });
+    setInterval(() => {
+      if (document.hidden) return;
+      const now = Date.now();
+      for (const v of views) {
+        if (v.loadingSince && !v.isLoadError && now - v.loadingSince > 45000) {
+          v.loadingSince = now;
+          v.load(true);                          // загрузка зависла — повторяем
+          continue;
+        }
+        const e = v.engine;
+        if (!e.ready) continue;
+        const last = Math.max(e.lastWsMsg || 0, e.lastDepthOk || 0);
+        if (now - last > 90000) e.wake();        // давно нет ни сделок, ни стакана
+        if (now - last > 240000 && !v.healing) {
+          v.healing = true;
+          v.load(true).finally(() => { v.healing = false; });
+        }
+      }
+    }, 10000);
+
+    // новая версия сайта на хостинге: перезагружаемся, когда вкладка в фоне, иначе предлагаем
+    const current = (document.querySelector('script[src*="app.js"]') || {}).src || '';
+    const ver = (current.match(/v=(\d+)/) || [])[1];
+    const check = async () => {
+      try {
+        const r = await fetch(location.pathname + '?_=' + Date.now(), { cache: 'no-store' });
+        const m = (await r.text()).match(/app\.js\?v=(\d+)/);
+        if (ver && m && m[1] !== ver) {
+          if (document.hidden) { location.reload(); return; }
+          const t = $('#toast');
+          t.innerHTML = 'Вышла новая версия терминала. <span style="color:var(--color-accent-2);cursor:pointer;text-decoration:underline" id="reload-now">Обновить</span>';
+          t.setAttribute('data-show', 'true');
+          $('#reload-now').addEventListener('click', () => location.reload());
+        }
+      } catch (err) { /* нет сети — проверим позже */ }
+    };
+    setInterval(check, 5 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  }
+
   function init() {
     // вернулись на вкладку / проснулся ПК — не ждём таймеров, проверяем соединения
     document.addEventListener('visibilitychange', () => {
@@ -1275,6 +1321,7 @@
     renderAlerts();
     window.StorageDB.open().then(() => window.StorageDB.prune()).catch(() => {});
     tickers.start().catch((e) => console.warn(e));
+    startHealthChecks();
     window.CTApp = { get state() { return state; }, views, tickers };
   }
 

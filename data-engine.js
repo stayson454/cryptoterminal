@@ -1026,6 +1026,7 @@
       const g = depthToGrid(depth);
       if (!g) return;
       this._status('depth', 'live');
+      this.lastDepthOk = Date.now();
       this.lastBook = g;
       const now = Date.now();
       const minute = Math.floor(now / MINUTE) * MINUTE;
