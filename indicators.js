@@ -102,7 +102,7 @@
       cat: 'chart', kind: 'pane', height: 96,
       name: 'Профиль по свечам',
       desc: 'объём, дельта и сделки по свечам',
-      defaults: { metric: 'delta', cumulative: false },
+      defaults: { metric: 'delta', cumulative: false, cvd: false },
       settings: [
         { key: 'metric', label: 'Метрика', type: 'seg', options: [['volume', 'Объём'], ['delta', 'Дельта объёма'], ['trades', 'Сделки'], ['tradesDelta', 'Дельта сделок']] },
         { key: 'cumulative', label: 'Накопительно', type: 'seg', options: [[false, 'Нет'], [true, 'Да']] }
@@ -110,6 +110,7 @@
       labels: { volume: 'Объём', delta: 'Дельта объёма', trades: 'Сделки', tradesDelta: 'Дельта сделок' },
       title(inst, r) {
         const m = inst.params.metric;
+        if (inst.params.cvd) return 'CVD (накопленная дельта), ' + r.opt.baseAsset;
         const unit = m === 'trades' || m === 'tradesDelta' ? '' : ', ' + r.opt.baseAsset;
         return this.labels[m] + unit;
       },
@@ -118,16 +119,22 @@
         const m = inst.params.metric;
         let h = '';
         for (const [k, l] of [['volume', 'Объём'], ['delta', 'Дельта объёма'], ['trades', 'Сделки'], ['tradesDelta', 'Дельта сделок']]) {
-          h += '<button type="button" class="ct-seg-sm" data-act="set" data-key="metric" data-val="' + k + '" aria-pressed="' + (m === k) + '">' + l + '</button>';
+          h += '<button type="button" class="ct-seg-sm" data-act="set" data-key="metric" data-val="' + k + '" aria-pressed="' + (!inst.params.cvd && m === k) + '">' + l + '</button>';
         }
+        h += '<button type="button" class="ct-seg-sm" data-act="set" data-key="cvd" data-val="' + (!inst.params.cvd) + '" aria-pressed="' + !!inst.params.cvd + '" title="CVD — накопленная дельта объёма за всю загруженную историю. Повторный щелчок возвращает обычную дельту">CVD</button>';
         h += '<button type="button" class="ct-seg-sm" data-act="set" data-key="cumulative" data-val="' + (!inst.params.cumulative) + '" aria-pressed="' + !!inst.params.cumulative + '" title="Нарастающий итог по свечам слева направо в видимом диапазоне"><span class="ct-toggle-mark" data-on="' + !!inst.params.cumulative + '"></span>Накопительно</button>';
         return h;
       },
-      signed(inst) { return inst.params.metric === 'delta' || inst.params.metric === 'tradesDelta'; },
+      signed(inst) { return !!inst.params.cvd || inst.params.metric === 'delta' || inst.params.metric === 'tradesDelta'; },
       series(r, inst) {
         const cs = r.candles();
         const out = new Float64Array(cs.length);
         const m = inst.params.metric;
+        if (inst.params.cvd) {
+          let acc = 0;
+          for (let i = 0; i < cs.length; i++) { acc += 2 * cs[i].buy - cs[i].v; out[i] = acc; }
+          return { v: out };
+        }
         for (let i = 0; i < cs.length; i++) {
           const c = cs[i];
           if (m === 'volume') out[i] = c.v;
@@ -138,7 +145,7 @@
         return { v: out };
       },
       visible(s, inst, i0, i1) {
-        if (!inst.params.cumulative) return s.v;
+        if (inst.params.cvd || !inst.params.cumulative) return s.v;
         const out = new Float64Array(s.v.length).fill(NaN);
         let acc = 0;
         for (let i = Math.max(0, i0); i <= i1 && i < s.v.length; i++) { acc += s.v[i]; out[i] = acc; }
@@ -152,8 +159,10 @@
       },
       draw(r, ctx, pane, inst, s, i0, i1, yOf) {
         const v = this.visible(s, inst, i0, i1);
-        if (inst.params.cumulative) {
+        if (inst.params.cvd || inst.params.cumulative) {
           r.zero(ctx, yOf(0));
+          r.area(ctx, i0, i1, v, yOf, yOf(0), (x) => x >= 0, r.rgba(r.C.up, 0.14));
+          r.area(ctx, i0, i1, v, yOf, yOf(0), (x) => x < 0, r.rgba(r.C.down, 0.14));
           r.line(ctx, i0, i1, v, yOf, r.rgba(r.C.accent, 0.95), 1.5);
           return;
         }
@@ -169,7 +178,9 @@
       legend(r, inst, s, i) {
         const v = this.visible(s, inst, r.vis ? r.vis[0] : 0, i)[i];
         const signed = this.signed(inst) || inst.params.cumulative;
-        return { right: val(v, signed ? (x) => signedFmt(x, short) : short, signed) };
+        const m = inst.params.metric;
+        const unit = m === 'trades' || m === 'tradesDelta' ? '' : ' ' + r.opt.baseAsset;
+        return { right: val(v, signed ? (x) => signedFmt(x, short) : short, signed) + '<span class="ct-pl-dim">' + unit + '</span>' };
       }
     },
 
@@ -221,10 +232,11 @@
         r.line(ctx, i0, i1, s.del, yOf, r.rgba(r.C.depthDelta, 0.95), 1.6);
       },
       legend(r, inst, s, i) {
+        const u = '<span class="ct-pl-dim">' + unitLabel(r, inst.params.units) + '</span>';
         return {
-          vals: dot('var(--color-depth-bid)') + 'бид ' + val(s.bid[i], short) +
-            dot('var(--color-depth-ask)') + 'аск ' + val(s.ask[i], short) +
-            dot('var(--color-depth-delta)') + 'дельта ' + val(s.del[i], (x) => signedFmt(x, short))
+          vals: dot('var(--color-depth-bid)') + 'бид ' + val(s.bid[i], short) + u +
+            dot('var(--color-depth-ask)') + 'аск ' + val(s.ask[i], short) + u +
+            dot('var(--color-depth-delta)') + 'дельта (бид − аск) ' + val(s.del[i], (x) => signedFmt(x, short)) + u
         };
       }
     },

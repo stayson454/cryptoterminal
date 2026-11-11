@@ -441,3 +441,23 @@ body[data-route="margin"] .ct-chart-route { display: none !important; }
 
 .mg-help ol { list-style: decimal; }
 .mg-help li { margin: .2rem 0; }
+
+
+/* --- Слои, легенда тепловой карты, подписи панелей ----------------------- */
+.ct-layers { pointer-events: auto; gap: .375rem; }
+.ct-lay-cap { color: var(--color-faint); }
+.ct-lay { cursor: pointer; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0 .5rem; height: 20px; font-size: .6875rem; color: var(--color-faint); }
+.ct-lay:hover { color: var(--color-text); }
+.ct-lay[aria-pressed="true"] { color: var(--color-text); border-color: var(--color-accent); background: color-mix(in oklab, var(--color-accent) 12%, transparent); }
+.ct-lay-alpha { display: inline-flex; align-items: center; gap: .375rem; margin-left: .25rem; color: var(--color-faint); }
+.ct-lay-alpha .ct-range { width: 64px; }
+.ct-heatleg { display: block; max-width: 560px; line-height: 1.6; white-space: normal; color: var(--color-muted); }
+.ct-heatleg b { color: var(--color-text); font-weight: 500; }
+.ct-sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 .25rem 0 .125rem; vertical-align: -1px; }
+.ct-grad { display: inline-block; width: 60px; height: 7px; border-radius: 2px; vertical-align: middle; background: linear-gradient(90deg, #140606, #d21e1c 45%, #1ec850 80%, #fff); }
+.ct-legend-layer::after { content: attr(data-time); position: absolute; top: 6px; right: calc(var(--ct-axis-w) + 8px); font-family: var(--font-mono); font-size: .6875rem; color: var(--color-faint); background: color-mix(in oklab, var(--color-bg) 80%, transparent); padding: 1px 6px; border-radius: var(--radius-sm); pointer-events: none; }
+.ct-pane-legend { overflow: visible; }
+.ct-pl-left { min-width: 0; flex: 1 1 auto; }
+.ct-pl-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.ct-pl-vals { flex: 0 0 auto; }
+.ct-pl-right { flex: 0 0 auto; }

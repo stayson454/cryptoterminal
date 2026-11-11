@@ -33,6 +33,14 @@
   // ================================================================ state
   function uid(p) { return (p || 'x') + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
+  // пресеты слоёв для кнопок «Вид»; дальше слои переключаются независимо
+  const LAYER_PRESETS = {
+    candles: { candles: true, clusters: false, heat: true },
+    profile: { candles: false, clusters: true, heat: true },
+    footprint: { candles: false, clusters: true, heat: true },
+    depthmap: { candles: true, clusters: false, heat: true }
+  };
+
   function newCell(from) {
     if (from) {
       const c = JSON.parse(JSON.stringify(from, skipPrivate));
@@ -204,6 +212,20 @@
         save();
         views.forEach((v) => v.pushOptions());
       });
+      q('layers').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-layer]');
+        if (!b) return;
+        const c = this.cell;
+        c.layers = Object.assign({}, c.layers || LAYER_PRESETS[c.view] || LAYER_PRESETS.candles);
+        c.layers[b.dataset.layer] = !c.layers[b.dataset.layer];
+        save();
+        this.pushOptions();
+      });
+      q('heatalpha').addEventListener('input', (e) => {
+        this.cell.heatAlpha = Number(e.target.value) / 100;
+        save();
+        this.pushOptions();
+      });
       q('zswitch').addEventListener('click', (e) => {
         e.stopPropagation();
         let z = this.cell.indicators.find((i) => i.type === 'zscore');
@@ -323,8 +345,12 @@
       const c = this.cell;
       const e = this.engine;
       const base = (e.info && e.info.base) || D.assetOf(c.symbol);
+      const layers = c.layers || LAYER_PRESETS[c.view] || LAYER_PRESETS.candles;
+      const heatAlpha = c.heatAlpha === undefined ? 1 : c.heatAlpha;
       this.renderer.setOptions({
         view: c.view,
+        layers,
+        heatAlpha,
         metric: c.metric,
         rowSize: this.rowSize,
         tz: state.tz,
@@ -339,8 +365,34 @@
       scale.innerHTML = c.metric === 'volume' || c.metric === 'trades'
         ? '<i style="background:var(--color-surface-2)"></i><i style="background:var(--color-up)"></i>'
         : '<i style="background:var(--color-down)"></i><i style="background:var(--color-up)"></i>';
+      this.syncLayerUI(layers, heatAlpha, c);
       this.q('zone').textContent = state.tz === 'utc' ? 'UTC' : 'Местное';
       this.q('celltitle').textContent = c.symbol + ' · ' + (c.market === 'spot' ? 'спот' : 'фьючерсы') + ' · ' + D.TF_LABEL[c.tf];
+    }
+
+    /** Переключатели слоёв и легенда: что именно показывает каждый слой. */
+    syncLayerUI(layers, heatAlpha, c) {
+      $$('[data-layer]', this.el).forEach((b) => b.setAttribute('aria-pressed', layers[b.dataset.layer] ? 'true' : 'false'));
+      this.q('heatalpha').value = String(Math.round(heatAlpha * 100));
+      this.q('heatalpha-v').textContent = Math.round(heatAlpha * 100) + '%';
+      const sw = (v, t) => '<i class="ct-sw" style="background:var(' + v + ')"></i>' + t;
+      const parts = [];
+      if (layers.heat) {
+        if (c.view === 'depthmap') {
+          parts.push('<b>Тепл. карта — ликвидность стакана</b> (заявки, $ на уровне, не сделки): ' +
+            '<span class="ct-grad"></span> мало → много');
+        } else {
+          parts.push('<b>Тепл. карта — Z-score ликвидности стакана</b> (заявки, не сделки): ' +
+            sw('--color-depth-z-ask-surge', 'аски ↑') + ' ' + sw('--color-depth-z-ask-drain', 'аски ↓') + ' ' +
+            sw('--color-depth-z-bid-surge', 'биды ↑') + ' ' + sw('--color-depth-z-bid-drain', 'биды ↓') +
+            ' · яркость = |Z| 0,5 / 1 / 2 / 3');
+        }
+      }
+      if (layers.clusters) {
+        parts.push('<b>Кластеры — исполненные сделки</b>: ' + sw('--color-up', 'покупки (ask)') + ' ' + sw('--color-down', 'продажи (bid)') + ' · длина = объём уровня');
+      }
+      this.q('heatleg').innerHTML = parts.join('<br>');
+      this.q('heatleg').style.display = parts.length ? '' : 'none';
     }
 
     pushIndicators() {
@@ -459,6 +511,7 @@
       const b = e.target.closest('[data-view]');
       if (!b) return;
       cellState().view = b.dataset.view;
+      cellState().layers = Object.assign({}, LAYER_PRESETS[b.dataset.view]);
       save();
       activeView().pushOptions();
       syncHeader();
@@ -697,6 +750,7 @@
       applyIndChange(view, { base: true });
       return;
     }
+    if (inst.type === 'profile' && key === 'metric') inst.params.cvd = false;   // обычная дельта вместо CVD
     const def = IND.DEFS[inst.type];
     const sch = (def.settings || []).find((s) => s.key === key);
     if (sch && sch.type === 'seg') {

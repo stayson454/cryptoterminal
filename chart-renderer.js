@@ -118,7 +118,9 @@
         baseAsset: 'BTC',
         quoteAsset: 'USDT',
         priceDecimals: 2,
-        tfLabel: '5м'
+        tfLabel: '5м',
+        layers: { candles: true, clusters: false, heat: true },
+        heatAlpha: 1
       };
       this.indicators = [];
       this.panes = [];
@@ -377,7 +379,7 @@
         el.innerHTML =
           '<span class="ct-pl-left">' +
           (def.controls ? '<span class="ct-pl-controls">' + def.controls(p.inst, this) + '</span>' : '') +
-          '<span class="ct-pl-name">' + def.title(p.inst, this) + '</span>' +
+          '<span class="ct-pl-name" title="' + def.title(p.inst, this).replace(/"/g, '&quot;') + '">' + def.title(p.inst, this) + '</span>' +
           '<span class="ct-pl-vals"></span>' +
           '</span>' +
           '<span class="ct-pl-right">' +
@@ -652,12 +654,22 @@
       ctx.beginPath();
       ctx.rect(0, 0, this.plotW, this.mainH);
       ctx.clip();
-      if (this.opt.view === 'depthmap') this._drawDepthMap(ctx, i0, i1);
-      else if (this.zEnabled) this._drawZBands(ctx, i0, i1);
+      const L = this.opt.layers;
+      // слой 1: тепловая карта стакана (ликвидность), независимая прозрачность
+      if (L.heat && (this.opt.view === 'depthmap' || this.zEnabled)) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0.05, Math.min(1, this.opt.heatAlpha));
+        if (this.opt.view === 'depthmap') this._drawDepthMap(ctx, i0, i1);
+        else this._drawZBands(ctx, i0, i1);
+        ctx.restore();
+      }
       this._drawGrid(ctx, i0, i1);
-      if (this.opt.view === 'candles' || this.opt.view === 'depthmap') this._drawCandles(ctx, i0, i1);
-      else if (this.opt.view === 'profile') this._drawProfiles(ctx, i0, i1);
-      else if (this.opt.view === 'footprint') this._drawFootprint(ctx, i0, i1);
+      // слой 2: свечи; слой 3: кластеры по исполненным сделкам (футпринт bid/ask или профиль)
+      if (L.candles) this._drawCandles(ctx, i0, i1);
+      if (L.clusters) {
+        if (this.opt.view === 'footprint') this._drawFootprint(ctx, i0, i1);
+        else this._drawProfiles(ctx, i0, i1);
+      }
       this._drawLastPriceLine(ctx);
       ctx.restore();
 
@@ -1158,6 +1170,10 @@
       const cs = this._candles();
       const i = this._legendIdx();
       if (!cs[i]) return;
+      // общая метка времени: все панели читают одну и ту же свечу
+      if (this.els.legendLayer) {
+        this.els.legendLayer.dataset.time = 'свеча ' + this._fmtTime(cs[i].t, true) + (this.opt.tz === 'utc' ? ' UTC' : '');
+      }
       for (const p of this.panes) {
         if (p.id === 'main' || !p.legendEl || !p.series) continue;
         let out;
@@ -1315,7 +1331,7 @@
       }
 
       // подсветка строки кластера + тултип
-      if (h.pane === 'main' && !this.drag && !this.ruler.active) {
+      if (h.pane === 'main' && !this.drag && !this.ruler.active && this.opt.layers.clusters) {
         const c = cs[h.idx];
         const price = this.pAt(h.y);
         if (c && price <= c.h + this.opt.rowSize && price >= c.l - this.opt.rowSize) {
