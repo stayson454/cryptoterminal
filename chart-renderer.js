@@ -263,7 +263,8 @@
     /** Новая свеча: если график «прилип» к правому краю — сдвигаем вид. */
     onNewCandle() {
       const n = this._candles().length;
-      if (this.viewEnd !== null && this.viewEnd >= n - 2 - 1e-9) this.viewEnd += 1;
+      // предыдущая последняя свеча (n-2) была на экране → сохраняем отступ справа
+      if (this.viewEnd !== null && this.viewEnd >= n - 2 - 1e-9 && this.viewEnd - this.plotW / this.barW <= n - 2) this.viewEnd += 1;
       this._lastLen = n;
       this.requestDraw(true);
     }
