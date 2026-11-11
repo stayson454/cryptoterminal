@@ -451,6 +451,7 @@ body[data-route="margin"] .ct-chart-route { display: none !important; }
 .ct-lay[aria-pressed="true"] { color: var(--color-text); border-color: var(--color-accent); background: color-mix(in oklab, var(--color-accent) 12%, transparent); }
 .ct-lay-alpha { display: inline-flex; align-items: center; gap: .375rem; margin-left: .25rem; color: var(--color-faint); }
 .ct-lay-alpha .ct-range { width: 64px; }
+.ct-lay-help { width: 20px; padding: 0; text-align: center; }
 .ct-heatleg { display: block; max-width: 560px; line-height: 1.6; white-space: normal; color: var(--color-muted); }
 .ct-heatleg b { color: var(--color-text); font-weight: 500; }
 .ct-sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 .25rem 0 .125rem; vertical-align: -1px; }

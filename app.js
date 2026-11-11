@@ -221,6 +221,11 @@
         save();
         this.pushOptions();
       });
+      q('legtoggle').addEventListener('click', () => {
+        state.legendOpen = !state.legendOpen;
+        save();
+        views.forEach((v) => v.pushOptions());
+      });
       q('heatalpha').addEventListener('input', (e) => {
         this.cell.heatAlpha = Number(e.target.value) / 100;
         save();
@@ -392,7 +397,8 @@
         parts.push('<b>Кластеры — исполненные сделки</b>: ' + sw('--color-up', 'покупки (ask)') + ' ' + sw('--color-down', 'продажи (bid)') + ' · длина = объём уровня');
       }
       this.q('heatleg').innerHTML = parts.join('<br>');
-      this.q('heatleg').style.display = parts.length ? '' : 'none';
+      this.q('heatleg').style.display = parts.length && state.legendOpen ? '' : 'none';
+      this.q('legtoggle').setAttribute('aria-pressed', state.legendOpen ? 'true' : 'false');
     }
 
     pushIndicators() {
