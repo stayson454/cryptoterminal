@@ -265,6 +265,9 @@
       const n = this._candles().length;
       // предыдущая последняя свеча (n-2) была на экране → сохраняем отступ справа
       if (this.viewEnd !== null && this.viewEnd >= n - 2 - 1e-9 && this.viewEnd - this.plotW / this.barW <= n - 2) this.viewEnd += 1;
+      // страховка: пустое место справа не больше ~45% ширины графика
+      const maxRight = (n - 1) + (this.plotW * 0.45) / this.barW;
+      if (this.viewEnd !== null && this.viewEnd > maxRight) this.viewEnd = maxRight;
       this._lastLen = n;
       this.requestDraw(true);
     }
