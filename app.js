@@ -351,7 +351,7 @@
       const e = this.engine;
       const base = (e.info && e.info.base) || D.assetOf(c.symbol);
       const layers = c.layers || LAYER_PRESETS[c.view] || LAYER_PRESETS.candles;
-      const heatAlpha = c.heatAlpha === undefined ? 1 : c.heatAlpha;
+      const heatAlpha = c.heatAlpha === undefined ? 0.6 : c.heatAlpha;
       this.renderer.setOptions({
         view: c.view,
         layers,
